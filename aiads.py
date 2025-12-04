@@ -1,68 +1,66 @@
 """
-AI Sales Copy & Ad Content Agent
-================================
-A complete AI system that generates multi-platform marketing content including:
-- Google Ad headlines & descriptions
-- Facebook/Instagram ad copies
-- Captions + Hashtags
-- SEO titles & meta descriptions
-- CTA suggestions
-- Keyword extraction
-- Landing page content
-
-Author: AI Sales Agent
-Version: 1.0.0
+AI Sales Copy & Ad Content Agent - Lightweight Version
+======================================================
+Optimized for fast loading on Streamlit Cloud
 """
 
 import streamlit as st
-import openai
 import os
 import json
 import sqlite3
 import re
 import io
 from datetime import datetime
-from dotenv import load_dotenv
-from docx import Document
-from docx.shared import Inches, Pt, RGBColor
-from docx.enum.text import WD_ALIGN_PARAGRAPH
-from reportlab.lib.pagesizes import letter, A4
-from reportlab.platypus import SimpleDocTemplate, Paragraph, Spacer, Table, TableStyle
-from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle
-from reportlab.lib import colors
-from reportlab.lib.units import inch
-import pandas as pd
-import nltk
-from collections import Counter
 
-# Load environment variables
-load_dotenv()
+# =============================================================================
+# PAGE CONFIG - MUST BE FIRST
+# =============================================================================
+st.set_page_config(
+    page_title="AI Sales Copy Agent",
+    page_icon="🚀",
+    layout="wide",
+    initial_sidebar_state="expanded"
+)
+
+# =============================================================================
+# LAZY IMPORTS - Load only when needed
+# =============================================================================
+@st.cache_resource
+def load_openai():
+    """Lazy load OpenAI"""
+    import openai
+    return openai
+
+@st.cache_resource
+def load_docx():
+    """Lazy load python-docx"""
+    from docx import Document
+    from docx.shared import Pt
+    from docx.enum.text import WD_ALIGN_PARAGRAPH
+    return Document, Pt, WD_ALIGN_PARAGRAPH
+
+@st.cache_resource
+def load_reportlab():
+    """Lazy load reportlab"""
+    from reportlab.lib.pagesizes import A4
+    from reportlab.platypus import SimpleDocTemplate, Paragraph, Spacer, Table, TableStyle
+    from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle
+    from reportlab.lib import colors
+    from reportlab.lib.units import inch
+    return SimpleDocTemplate, Paragraph, Spacer, Table, TableStyle, getSampleStyleSheet, ParagraphStyle, colors, inch, A4
 
 # =============================================================================
 # DATABASE SETUP
 # =============================================================================
-
+@st.cache_resource
 def init_database():
-    """Initialize SQLite database with required tables"""
-    conn = sqlite3.connect('sales_content.db')
+    """Initialize SQLite database"""
+    conn = sqlite3.connect('sales_content.db', check_same_thread=False)
     cursor = conn.cursor()
     
-    # Users table
-    cursor.execute('''
-        CREATE TABLE IF NOT EXISTS users (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            username TEXT UNIQUE NOT NULL,
-            password TEXT NOT NULL,
-            email TEXT,
-            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-        )
-    ''')
-    
-    # Content history table
     cursor.execute('''
         CREATE TABLE IF NOT EXISTS content_history (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
-            user_id INTEGER,
             business_name TEXT,
             business_type TEXT,
             product_service TEXT,
@@ -70,1355 +68,463 @@ def init_database():
             offer TEXT,
             tone TEXT,
             platform TEXT,
-            headlines TEXT,
-            descriptions TEXT,
-            hashtags TEXT,
-            keywords TEXT,
-            cta TEXT,
-            seo_title TEXT,
-            meta_description TEXT,
-            landing_page_content TEXT,
             full_response TEXT,
-            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-            FOREIGN KEY (user_id) REFERENCES users (id)
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
         )
     ''')
-    
     conn.commit()
-    conn.close()
+    return conn
 
-def save_to_history(user_id, inputs, outputs):
-    """Save generated content to database history"""
-    conn = sqlite3.connect('sales_content.db')
+def save_to_history(conn, inputs, outputs):
+    """Save generated content to database"""
     cursor = conn.cursor()
-    
     cursor.execute('''
         INSERT INTO content_history 
-        (user_id, business_name, business_type, product_service, target_audience, 
-         offer, tone, platform, headlines, descriptions, hashtags, keywords, 
-         cta, seo_title, meta_description, landing_page_content, full_response)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        (business_name, business_type, product_service, target_audience, offer, tone, platform, full_response)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?)
     ''', (
-        user_id,
         inputs.get('business_name', ''),
         inputs.get('business_type', ''),
         inputs.get('product_service', ''),
         inputs.get('target_audience', ''),
         inputs.get('offer', ''),
         inputs.get('tone', ''),
-        inputs.get('platform', ''),
-        outputs.get('headlines', ''),
-        outputs.get('descriptions', ''),
-        outputs.get('hashtags', ''),
-        outputs.get('keywords', ''),
-        outputs.get('cta', ''),
-        outputs.get('seo_title', ''),
-        outputs.get('meta_description', ''),
-        outputs.get('landing_page_content', ''),
+        str(inputs.get('platform', '')),
         json.dumps(outputs)
     ))
-    
     conn.commit()
-    conn.close()
 
-def get_user_history(user_id, limit=50):
-    """Retrieve user's content generation history"""
-    conn = sqlite3.connect('sales_content.db')
+def get_history(conn, limit=20):
+    """Get content history"""
     cursor = conn.cursor()
-    
-    cursor.execute('''
-        SELECT * FROM content_history 
-        WHERE user_id = ? 
-        ORDER BY created_at DESC 
-        LIMIT ?
-    ''', (user_id, limit))
-    
-    columns = [description[0] for description in cursor.description]
-    rows = cursor.fetchall()
-    conn.close()
-    
-    return [dict(zip(columns, row)) for row in rows]
-
-def authenticate_user(username, password):
-    """Simple user authentication"""
-    conn = sqlite3.connect('sales_content.db')
-    cursor = conn.cursor()
-    
-    cursor.execute('''
-        SELECT id, username FROM users 
-        WHERE username = ? AND password = ?
-    ''', (username, password))
-    
-    user = cursor.fetchone()
-    conn.close()
-    
-    return user
-
-def register_user(username, password, email):
-    """Register a new user"""
-    conn = sqlite3.connect('sales_content.db')
-    cursor = conn.cursor()
-    
-    try:
-        cursor.execute('''
-            INSERT INTO users (username, password, email) 
-            VALUES (?, ?, ?)
-        ''', (username, password, email))
-        conn.commit()
-        user_id = cursor.lastrowid
-        conn.close()
-        return user_id
-    except sqlite3.IntegrityError:
-        conn.close()
-        return None
+    cursor.execute('SELECT * FROM content_history ORDER BY created_at DESC LIMIT ?', (limit,))
+    columns = [desc[0] for desc in cursor.description]
+    return [dict(zip(columns, row)) for row in cursor.fetchall()]
 
 # =============================================================================
-# NLP KEYWORD EXTRACTION ENGINE
+# SIMPLE KEYWORD EXTRACTION (No NLTK needed)
 # =============================================================================
-
-def download_nltk_data():
-    """Download required NLTK data"""
-    try:
-        nltk.data.find('tokenizers/punkt')
-    except LookupError:
-        nltk.download('punkt', quiet=True)
-    try:
-        nltk.data.find('corpora/stopwords')
-    except LookupError:
-        nltk.download('stopwords', quiet=True)
-    try:
-        nltk.data.find('taggers/averaged_perceptron_tagger')
-    except LookupError:
-        nltk.download('averaged_perceptron_tagger', quiet=True)
-
-def extract_keywords_nlp(text, num_keywords=15):
-    """
-    Extract keywords from text using NLTK
-    Returns most relevant keywords based on frequency and POS tagging
-    """
-    download_nltk_data()
-    
-    from nltk.corpus import stopwords
-    from nltk.tokenize import word_tokenize
-    from nltk import pos_tag
-    
-    # Tokenize and clean
-    tokens = word_tokenize(text.lower())
-    stop_words = set(stopwords.words('english'))
-    
-    # Additional marketing stopwords
-    marketing_stopwords = {
-        'will', 'can', 'get', 'make', 'use', 'new', 'one', 'also', 
-        'like', 'just', 'know', 'take', 'come', 'see', 'want', 'look',
-        'give', 'think', 'good', 'best', 'way', 'need', 'feel', 'try'
+def extract_keywords_simple(text, num_keywords=15):
+    """Extract keywords without NLTK - uses simple frequency analysis"""
+    stopwords = {
+        'the', 'a', 'an', 'and', 'or', 'but', 'in', 'on', 'at', 'to', 'for',
+        'of', 'with', 'by', 'from', 'is', 'are', 'was', 'were', 'be', 'been',
+        'being', 'have', 'has', 'had', 'do', 'does', 'did', 'will', 'would',
+        'could', 'should', 'may', 'might', 'must', 'can', 'this', 'that',
+        'these', 'those', 'i', 'you', 'he', 'she', 'it', 'we', 'they', 'who',
+        'what', 'which', 'when', 'where', 'why', 'how', 'all', 'each', 'every',
+        'both', 'few', 'more', 'most', 'other', 'some', 'such', 'no', 'nor',
+        'not', 'only', 'own', 'same', 'so', 'than', 'too', 'very', 'just',
+        'your', 'our', 'their', 'my', 'his', 'her', 'its', 'as', 'if', 'then',
+        'because', 'while', 'although', 'after', 'before', 'above', 'below',
+        'between', 'into', 'through', 'during', 'about', 'against', 'without'
     }
-    stop_words.update(marketing_stopwords)
     
-    # Filter tokens
-    filtered_tokens = [
-        token for token in tokens 
-        if token.isalnum() and token not in stop_words and len(token) > 2
-    ]
+    words = re.findall(r'\b[a-zA-Z]{3,}\b', text.lower())
+    word_count = {}
+    for word in words:
+        if word not in stopwords:
+            word_count[word] = word_count.get(word, 0) + 1
     
-    # POS tagging - keep nouns, verbs, adjectives
-    pos_tags = pos_tag(filtered_tokens)
-    important_tags = {'NN', 'NNS', 'NNP', 'NNPS', 'VB', 'VBG', 'JJ', 'JJR', 'JJS'}
-    
-    important_words = [
-        word for word, tag in pos_tags 
-        if tag in important_tags
-    ]
-    
-    # Get frequency distribution
-    word_freq = Counter(important_words)
-    keywords = [word for word, count in word_freq.most_common(num_keywords)]
-    
-    return keywords
+    sorted_words = sorted(word_count.items(), key=lambda x: x[1], reverse=True)
+    return [word for word, count in sorted_words[:num_keywords]]
 
-def generate_hashtags(keywords, platform='instagram'):
-    """Generate platform-appropriate hashtags from keywords"""
-    hashtags = []
-    
-    for keyword in keywords[:10]:
-        # Clean and format keyword
-        tag = keyword.replace(' ', '').replace('-', '').lower()
-        if tag:
-            hashtags.append(f"#{tag}")
-    
-    # Add common marketing hashtags based on platform
-    if platform.lower() in ['instagram', 'facebook']:
-        common_tags = ['#marketing', '#business', '#entrepreneur', '#success', '#growth']
-        hashtags.extend(common_tags[:3])
-    
+def generate_hashtags(keywords):
+    """Generate hashtags from keywords"""
+    hashtags = [f"#{kw.replace(' ', '')}" for kw in keywords[:10]]
+    hashtags.extend(['#marketing', '#business', '#growth'])
     return list(set(hashtags))[:15]
 
 # =============================================================================
-# PROMPT TEMPLATES ENGINE
+# PROMPT TEMPLATES
 # =============================================================================
+def get_tone_modifier(tone):
+    """Get tone-specific instructions"""
+    tones = {
+        'Professional': "Use formal, business-appropriate language. Be authoritative.",
+        'Emotional': "Connect emotionally. Use storytelling. Appeal to feelings.",
+        'Exciting': "Use energetic, dynamic language. Create enthusiasm.",
+        'Urgent': "Create urgency and scarcity. Use time-sensitive language.",
+        'Friendly': "Use warm, conversational tone. Be approachable.",
+        'Luxury': "Use sophisticated, premium language. Emphasize exclusivity."
+    }
+    return tones.get(tone, tones['Professional'])
 
-class PromptTemplates:
-    """Prompt templates for different platforms and content types"""
-    
-    @staticmethod
-    def get_tone_modifier(tone):
-        """Return tone-specific writing instructions"""
-        tone_modifiers = {
-            'Professional': "Use formal, business-appropriate language. Be authoritative and trustworthy. Focus on value propositions and credibility.",
-            'Emotional': "Connect emotionally with the reader. Use storytelling elements. Appeal to feelings, desires, and aspirations.",
-            'Exciting': "Use energetic, dynamic language. Create enthusiasm and anticipation. Use action words and exclamation points sparingly but effectively.",
-            'Urgent': "Create a sense of urgency and scarcity. Use time-sensitive language. Emphasize limited availability or time-bound offers.",
-            'Friendly': "Use warm, conversational tone. Be approachable and relatable. Write as if talking to a friend.",
-            'Luxury': "Use sophisticated, premium language. Emphasize exclusivity and quality. Appeal to aspirational desires."
-        }
-        return tone_modifiers.get(tone, tone_modifiers['Professional'])
-    
-    @staticmethod
-    def google_ads_prompt(inputs):
-        """Generate Google Ads content prompt"""
-        return f"""
-You are an expert Google Ads copywriter. Create high-converting Google Ads content.
+def create_prompt(inputs):
+    """Create the main content generation prompt"""
+    return f"""You are an expert marketing copywriter. Generate marketing content for:
 
-BUSINESS DETAILS:
-- Business Name: {inputs['business_name']}
-- Business Type: {inputs['business_type']}
-- Product/Service: {inputs['product_service']}
-- Target Audience: {inputs['target_audience']}
-- Offer: {inputs['offer']}
-- Tone: {inputs['tone']}
+BUSINESS: {inputs['business_name']}
+TYPE: {inputs['business_type']}
+PRODUCT/SERVICE: {inputs['product_service']}
+TARGET AUDIENCE: {inputs['target_audience']}
+OFFER: {inputs['offer']}
+TONE: {inputs['tone']} - {get_tone_modifier(inputs['tone'])}
 
-TONE INSTRUCTIONS: {PromptTemplates.get_tone_modifier(inputs['tone'])}
-
-STRICT CHARACTER LIMITS:
-- Headlines: Maximum 30 characters each (including spaces)
-- Descriptions: Maximum 90 characters each (including spaces)
-
-Generate the following in JSON format:
-{{
-    "headlines": [
-        // 10 unique headlines, each MUST be 30 characters or less
-    ],
-    "descriptions": [
-        // 5 unique descriptions, each MUST be 90 characters or less
-    ],
-    "display_urls": [
-        // 3 suggested display URL paths
-    ],
-    "keywords": [
-        // 15 relevant search keywords for this ad
-    ],
-    "negative_keywords": [
-        // 5 negative keywords to exclude
-    ],
-    "cta_suggestions": [
-        // 5 call-to-action phrases
-    ]
-}}
-
-IMPORTANT: 
-- Count characters carefully - headlines over 30 chars will be rejected
-- Make headlines compelling and action-oriented
-- Include the main keyword in at least 3 headlines
-- Descriptions should expand on the value proposition
-"""
-
-    @staticmethod
-    def facebook_instagram_prompt(inputs):
-        """Generate Facebook/Instagram ad content prompt"""
-        return f"""
-You are a social media marketing expert specializing in Facebook and Instagram ads.
-
-BUSINESS DETAILS:
-- Business Name: {inputs['business_name']}
-- Business Type: {inputs['business_type']}
-- Product/Service: {inputs['product_service']}
-- Target Audience: {inputs['target_audience']}
-- Offer: {inputs['offer']}
-- Tone: {inputs['tone']}
-
-TONE INSTRUCTIONS: {PromptTemplates.get_tone_modifier(inputs['tone'])}
-
-Generate the following in JSON format:
-{{
-    "facebook_ad": {{
-        "primary_text": [
-            // 3 variations of primary text (125 characters ideal, max 500)
-        ],
-        "headlines": [
-            // 5 headlines (max 40 characters)
-        ],
-        "descriptions": [
-            // 3 link descriptions (max 30 characters)
-        ],
-        "cta_button": [
-            // 3 CTA button suggestions (Shop Now, Learn More, Sign Up, etc.)
-        ]
-    }},
-    "instagram_ad": {{
-        "captions": [
-            // 3 engaging captions (optimal 138-150 characters, can go up to 2200)
-        ],
-        "story_text": [
-            // 3 short story overlay texts (max 100 characters)
-        ],
-        "hashtags": [
-            // 20 relevant hashtags
-        ],
-        "bio_link_cta": [
-            // 3 "Link in bio" style CTAs
-        ]
-    }},
-    "carousel_hooks": [
-        // 5 carousel slide headline hooks
-    ],
-    "engagement_questions": [
-        // 3 questions to boost engagement in comments
-    ]
-}}
-
-IMPORTANT:
-- Facebook primary text should hook in first 125 characters
-- Instagram captions should be engaging and include emojis where appropriate
-- Hashtags should mix popular and niche tags
-- Include a strong hook in the first line
-"""
-
-    @staticmethod
-    def seo_content_prompt(inputs):
-        """Generate SEO-optimized content prompt"""
-        return f"""
-You are an SEO specialist and content strategist.
-
-BUSINESS DETAILS:
-- Business Name: {inputs['business_name']}
-- Business Type: {inputs['business_type']}
-- Product/Service: {inputs['product_service']}
-- Target Audience: {inputs['target_audience']}
-- Offer: {inputs['offer']}
-- Tone: {inputs['tone']}
-
-TONE INSTRUCTIONS: {PromptTemplates.get_tone_modifier(inputs['tone'])}
-
-Generate the following in JSON format:
-{{
-    "seo_titles": [
-        // 5 SEO-optimized titles (50-60 characters)
-    ],
-    "meta_descriptions": [
-        // 5 meta descriptions (150-160 characters)
-    ],
-    "h1_headings": [
-        // 3 H1 heading suggestions
-    ],
-    "h2_subheadings": [
-        // 5 H2 subheading suggestions
-    ],
-    "primary_keywords": [
-        // 5 primary target keywords
-    ],
-    "secondary_keywords": [
-        // 10 secondary/LSI keywords
-    ],
-    "long_tail_keywords": [
-        // 10 long-tail keyword phrases
-    ],
-    "url_slugs": [
-        // 3 SEO-friendly URL slug suggestions
-    ],
-    "image_alt_texts": [
-        // 5 image alt text suggestions
-    ],
-    "schema_suggestions": {{
-        "type": "suggested schema markup type",
-        "key_properties": ["list of key schema properties to include"]
-    }}
-}}
-
-IMPORTANT:
-- Titles should include primary keyword near the beginning
-- Meta descriptions should be compelling and include a CTA
-- Keywords should have commercial/transactional intent
-"""
-
-    @staticmethod
-    def landing_page_prompt(inputs):
-        """Generate landing page content prompt"""
-        return f"""
-You are a conversion rate optimization expert and landing page copywriter.
-
-BUSINESS DETAILS:
-- Business Name: {inputs['business_name']}
-- Business Type: {inputs['business_type']}
-- Product/Service: {inputs['product_service']}
-- Target Audience: {inputs['target_audience']}
-- Offer: {inputs['offer']}
-- Tone: {inputs['tone']}
-
-TONE INSTRUCTIONS: {PromptTemplates.get_tone_modifier(inputs['tone'])}
-
-Generate the following in JSON format:
-{{
-    "hero_section": {{
-        "headline": "Main headline (max 10 words)",
-        "subheadline": "Supporting subheadline (max 20 words)",
-        "cta_button_text": "Primary CTA button text",
-        "cta_supporting_text": "Text below CTA (e.g., 'No credit card required')"
-    }},
-    "value_propositions": [
-        {{
-            "title": "Value prop title",
-            "description": "2-3 sentence description",
-            "icon_suggestion": "suggested icon name"
-        }}
-        // 4 total value propositions
-    ],
-    "features_benefits": [
-        {{
-            "feature": "Feature name",
-            "benefit": "How it benefits the user"
-        }}
-        // 6 feature-benefit pairs
-    ],
-    "social_proof": {{
-        "testimonial_prompts": [
-            // 3 prompts for collecting testimonials
-        ],
-        "stats_suggestions": [
-            // 3 types of stats to showcase
-        ],
-        "trust_badges": [
-            // 5 trust badge suggestions
-        ]
-    }},
-    "faq_questions": [
-        {{
-            "question": "FAQ question",
-            "answer": "Concise answer"
-        }}
-        // 5 FAQ items
-    ],
-    "urgency_elements": [
-        // 3 urgency/scarcity elements
-    ],
-    "final_cta": {{
-        "headline": "Final section headline",
-        "cta_text": "Final CTA button text",
-        "guarantee": "Risk reversal statement"
-    }}
-}}
-
-IMPORTANT:
-- Hero headline should be benefit-focused
-- Value props should address pain points
-- Include specific numbers where possible
-- CTAs should be action-oriented
-"""
-
-    @staticmethod
-    def multi_platform_prompt(inputs):
-        """Generate content for all platforms at once"""
-        return f"""
-You are a multi-channel marketing strategist and copywriter.
-
-BUSINESS DETAILS:
-- Business Name: {inputs['business_name']}
-- Business Type: {inputs['business_type']}
-- Product/Service: {inputs['product_service']}
-- Target Audience: {inputs['target_audience']}
-- Offer: {inputs['offer']}
-- Tone: {inputs['tone']}
-
-TONE INSTRUCTIONS: {PromptTemplates.get_tone_modifier(inputs['tone'])}
-
-Generate comprehensive marketing content for ALL platforms in JSON format:
+Generate content in this exact JSON format:
 {{
     "google_ads": {{
-        "headlines": ["10 headlines, max 30 chars each"],
-        "descriptions": ["5 descriptions, max 90 chars each"],
-        "keywords": ["15 target keywords"]
+        "headlines": ["5 headlines, MAX 30 characters each"],
+        "descriptions": ["3 descriptions, MAX 90 characters each"]
     }},
     "facebook": {{
-        "primary_texts": ["3 ad texts"],
-        "headlines": ["5 headlines, max 40 chars"],
-        "cta_buttons": ["3 CTA suggestions"]
+        "primary_text": ["2 ad texts, 125-500 characters"],
+        "headlines": ["3 headlines, MAX 40 characters"]
     }},
     "instagram": {{
-        "captions": ["3 engaging captions with emojis"],
-        "hashtags": ["20 relevant hashtags"],
-        "story_texts": ["3 story overlay texts"]
+        "captions": ["2 engaging captions with emojis"],
+        "hashtags": ["15 relevant hashtags"]
     }},
     "seo": {{
-        "titles": ["5 SEO titles, 50-60 chars"],
-        "meta_descriptions": ["5 meta descriptions, 150-160 chars"],
-        "keywords": {{
-            "primary": ["5 primary keywords"],
-            "secondary": ["10 secondary keywords"],
-            "long_tail": ["10 long-tail phrases"]
-        }}
+        "titles": ["3 SEO titles, 50-60 characters"],
+        "meta_descriptions": ["3 meta descriptions, 150-160 characters"]
     }},
     "landing_page": {{
-        "hero_headline": "Main headline",
-        "hero_subheadline": "Supporting text",
-        "value_props": ["4 value propositions"],
-        "cta_texts": ["3 CTA variations"],
-        "testimonial_prompts": ["3 testimonial collection prompts"]
+        "headline": "Main headline",
+        "subheadline": "Supporting text",
+        "cta_buttons": ["3 CTA button texts"],
+        "value_props": ["4 value propositions"]
     }},
-    "email": {{
-        "subject_lines": ["5 email subject lines"],
-        "preview_texts": ["3 preview/preheader texts"],
-        "cta_buttons": ["3 email CTA texts"]
-    }},
-    "general": {{
-        "taglines": ["5 brand taglines"],
-        "elevator_pitch": "30-second elevator pitch",
-        "unique_selling_points": ["3 USPs"]
-    }}
+    "keywords": ["10 target keywords"],
+    "cta_suggestions": ["5 call-to-action phrases"]
 }}
 
-Ensure all content is cohesive across platforms while optimized for each platform's best practices.
-"""
+IMPORTANT: Return ONLY valid JSON. No markdown, no code blocks, no explanation."""
 
 # =============================================================================
-# LLM CONTENT GENERATION ENGINE
+# CONTENT GENERATOR
 # =============================================================================
-
-class ContentGenerator:
-    """Main content generation engine using OpenAI"""
+def generate_content(api_key, inputs):
+    """Generate content using OpenAI"""
+    openai = load_openai()
+    client = openai.OpenAI(api_key=api_key)
     
-    def __init__(self, api_key):
-        self.client = openai.OpenAI(api_key=api_key)
-        self.model = "gpt-4o-mini"  # Can be changed to gpt-4o for better quality
+    try:
+        response = client.chat.completions.create(
+            model="gpt-4o-mini",
+            messages=[
+                {"role": "system", "content": "You are a marketing expert. Always respond with valid JSON only."},
+                {"role": "user", "content": create_prompt(inputs)}
+            ],
+            max_tokens=3000,
+            temperature=0.7
+        )
+        
+        content = response.choices[0].message.content.strip()
+        
+        if content.startswith('```'):
+            content = re.sub(r'^```json?\n?', '', content)
+            content = re.sub(r'\n?```$', '', content)
+        
+        return json.loads(content)
     
-    def generate_content(self, prompt, max_tokens=4000):
-        """Generate content using OpenAI API"""
-        try:
-            response = self.client.chat.completions.create(
-                model=self.model,
-                messages=[
-                    {
-                        "role": "system",
-                        "content": "You are an expert marketing copywriter. Always respond with valid JSON only. No markdown, no code blocks, just pure JSON."
-                    },
-                    {
-                        "role": "user",
-                        "content": prompt
-                    }
-                ],
-                max_tokens=max_tokens,
-                temperature=0.7
-            )
-            
-            content = response.choices[0].message.content.strip()
-            
-            # Clean JSON response
-            if content.startswith('```'):
-                content = re.sub(r'^```json?\n?', '', content)
-                content = re.sub(r'\n?```$', '', content)
-            
-            return json.loads(content)
-            
-        except json.JSONDecodeError as e:
-            st.error(f"Error parsing response: {e}")
-            return None
-        except Exception as e:
-            st.error(f"API Error: {e}")
-            return None
-    
-    def generate_google_ads(self, inputs):
-        """Generate Google Ads content"""
-        prompt = PromptTemplates.google_ads_prompt(inputs)
-        return self.generate_content(prompt)
-    
-    def generate_social_media(self, inputs):
-        """Generate Facebook/Instagram content"""
-        prompt = PromptTemplates.facebook_instagram_prompt(inputs)
-        return self.generate_content(prompt)
-    
-    def generate_seo_content(self, inputs):
-        """Generate SEO-optimized content"""
-        prompt = PromptTemplates.seo_content_prompt(inputs)
-        return self.generate_content(prompt)
-    
-    def generate_landing_page(self, inputs):
-        """Generate landing page content"""
-        prompt = PromptTemplates.landing_page_prompt(inputs)
-        return self.generate_content(prompt)
-    
-    def generate_all_platforms(self, inputs):
-        """Generate content for all platforms"""
-        prompt = PromptTemplates.multi_platform_prompt(inputs)
-        return self.generate_content(prompt, max_tokens=6000)
+    except json.JSONDecodeError:
+        st.error("Failed to parse AI response. Please try again.")
+        return None
+    except Exception as e:
+        st.error(f"API Error: {str(e)}")
+        return None
 
 # =============================================================================
-# EXPORT FUNCTIONS (PDF & DOCX)
+# EXPORT FUNCTIONS
 # =============================================================================
-
-def export_to_docx(content_data, inputs):
-    """Export generated content to Word document"""
+def export_to_docx(content, inputs):
+    """Export to Word document"""
+    Document, Pt, WD_ALIGN_PARAGRAPH = load_docx()
+    
     doc = Document()
+    doc.add_heading('AI Generated Marketing Content', 0)
     
-    # Title
-    title = doc.add_heading('AI Generated Marketing Content', 0)
-    title.alignment = WD_ALIGN_PARAGRAPH.CENTER
-    
-    # Business Info Section
     doc.add_heading('Business Information', level=1)
-    info_table = doc.add_table(rows=6, cols=2)
-    info_table.style = 'Table Grid'
+    doc.add_paragraph(f"Business: {inputs.get('business_name', '')}")
+    doc.add_paragraph(f"Type: {inputs.get('business_type', '')}")
+    doc.add_paragraph(f"Product/Service: {inputs.get('product_service', '')}")
+    doc.add_paragraph(f"Audience: {inputs.get('target_audience', '')}")
+    doc.add_paragraph(f"Offer: {inputs.get('offer', '')}")
+    doc.add_paragraph(f"Tone: {inputs.get('tone', '')}")
     
-    info_items = [
-        ('Business Name', inputs.get('business_name', '')),
-        ('Business Type', inputs.get('business_type', '')),
-        ('Product/Service', inputs.get('product_service', '')),
-        ('Target Audience', inputs.get('target_audience', '')),
-        ('Offer', inputs.get('offer', '')),
-        ('Tone', inputs.get('tone', ''))
-    ]
-    
-    for i, (label, value) in enumerate(info_items):
-        info_table.rows[i].cells[0].text = label
-        info_table.rows[i].cells[1].text = str(value)
-    
-    doc.add_paragraph()
-    
-    # Add content sections based on available data
-    def add_list_section(title, items):
-        if items:
-            doc.add_heading(title, level=2)
-            for item in items:
+    def add_section(title, data):
+        doc.add_heading(title, level=1)
+        if isinstance(data, dict):
+            for key, value in data.items():
+                doc.add_heading(key.replace('_', ' ').title(), level=2)
+                if isinstance(value, list):
+                    for item in value:
+                        doc.add_paragraph(f"• {item}", style='List Bullet')
+                else:
+                    doc.add_paragraph(str(value))
+        elif isinstance(data, list):
+            for item in data:
                 doc.add_paragraph(f"• {item}", style='List Bullet')
-            doc.add_paragraph()
     
-    def add_dict_section(title, data, level=2):
-        if data:
-            doc.add_heading(title, level=level)
-            if isinstance(data, dict):
-                for key, value in data.items():
-                    if isinstance(value, list):
-                        doc.add_heading(key.replace('_', ' ').title(), level=level+1)
-                        for item in value:
-                            if isinstance(item, dict):
-                                for k, v in item.items():
-                                    doc.add_paragraph(f"{k}: {v}")
-                            else:
-                                doc.add_paragraph(f"• {item}", style='List Bullet')
-                    elif isinstance(value, dict):
-                        add_dict_section(key.replace('_', ' ').title(), value, level+1)
-                    else:
-                        doc.add_paragraph(f"{key.replace('_', ' ').title()}: {value}")
-            doc.add_paragraph()
+    if content:
+        for section, data in content.items():
+            add_section(section.replace('_', ' ').title(), data)
     
-    # Process content data
-    if isinstance(content_data, dict):
-        for section_name, section_content in content_data.items():
-            section_title = section_name.replace('_', ' ').title()
-            
-            if isinstance(section_content, list):
-                add_list_section(section_title, section_content)
-            elif isinstance(section_content, dict):
-                add_dict_section(section_title, section_content)
-            else:
-                doc.add_heading(section_title, level=2)
-                doc.add_paragraph(str(section_content))
+    doc.add_paragraph(f"\nGenerated: {datetime.now().strftime('%Y-%m-%d %H:%M')}")
     
-    # Footer
-    doc.add_paragraph()
-    footer = doc.add_paragraph()
-    footer.add_run(f"Generated on: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
-    footer.alignment = WD_ALIGN_PARAGRAPH.CENTER
-    
-    # Save to bytes
-    docx_buffer = io.BytesIO()
-    doc.save(docx_buffer)
-    docx_buffer.seek(0)
-    
-    return docx_buffer
+    buffer = io.BytesIO()
+    doc.save(buffer)
+    buffer.seek(0)
+    return buffer
 
-def export_to_pdf(content_data, inputs):
-    """Export generated content to PDF"""
-    pdf_buffer = io.BytesIO()
-    doc = SimpleDocTemplate(pdf_buffer, pagesize=A4,
-                           rightMargin=72, leftMargin=72,
-                           topMargin=72, bottomMargin=18)
+def export_to_pdf(content, inputs):
+    """Export to PDF"""
+    SimpleDocTemplate, Paragraph, Spacer, Table, TableStyle, getSampleStyleSheet, ParagraphStyle, colors, inch, A4 = load_reportlab()
     
+    buffer = io.BytesIO()
+    doc = SimpleDocTemplate(buffer, pagesize=A4)
     styles = getSampleStyleSheet()
-    
-    # Custom styles
-    title_style = ParagraphStyle(
-        'CustomTitle',
-        parent=styles['Heading1'],
-        fontSize=24,
-        spaceAfter=30,
-        alignment=1  # Center
-    )
-    
-    heading_style = ParagraphStyle(
-        'CustomHeading',
-        parent=styles['Heading2'],
-        fontSize=14,
-        spaceBefore=20,
-        spaceAfter=10,
-        textColor=colors.darkblue
-    )
-    
-    subheading_style = ParagraphStyle(
-        'CustomSubheading',
-        parent=styles['Heading3'],
-        fontSize=12,
-        spaceBefore=15,
-        spaceAfter=8
-    )
-    
-    body_style = ParagraphStyle(
-        'CustomBody',
-        parent=styles['Normal'],
-        fontSize=10,
-        spaceBefore=5,
-        spaceAfter=5
-    )
-    
-    bullet_style = ParagraphStyle(
-        'CustomBullet',
-        parent=styles['Normal'],
-        fontSize=10,
-        leftIndent=20,
-        spaceBefore=3,
-        spaceAfter=3
-    )
-    
     story = []
     
-    # Title
-    story.append(Paragraph("AI Generated Marketing Content", title_style))
+    story.append(Paragraph("AI Generated Marketing Content", styles['Title']))
     story.append(Spacer(1, 20))
     
-    # Business Info
-    story.append(Paragraph("Business Information", heading_style))
-    
-    info_data = [
-        ['Field', 'Value'],
-        ['Business Name', inputs.get('business_name', '')],
-        ['Business Type', inputs.get('business_type', '')],
-        ['Product/Service', inputs.get('product_service', '')],
-        ['Target Audience', inputs.get('target_audience', '')],
-        ['Offer', inputs.get('offer', '')],
-        ['Tone', inputs.get('tone', '')]
-    ]
-    
-    info_table = Table(info_data, colWidths=[2*inch, 4*inch])
-    info_table.setStyle(TableStyle([
-        ('BACKGROUND', (0, 0), (-1, 0), colors.darkblue),
-        ('TEXTCOLOR', (0, 0), (-1, 0), colors.whitesmoke),
-        ('ALIGN', (0, 0), (-1, -1), 'LEFT'),
-        ('FONTNAME', (0, 0), (-1, 0), 'Helvetica-Bold'),
-        ('FONTSIZE', (0, 0), (-1, -1), 10),
-        ('BOTTOMPADDING', (0, 0), (-1, 0), 12),
-        ('BACKGROUND', (0, 1), (-1, -1), colors.beige),
-        ('GRID', (0, 0), (-1, -1), 1, colors.black)
-    ]))
-    
-    story.append(info_table)
+    story.append(Paragraph("Business Information", styles['Heading1']))
+    info = f"""
+    <b>Business:</b> {inputs.get('business_name', '')}<br/>
+    <b>Type:</b> {inputs.get('business_type', '')}<br/>
+    <b>Product/Service:</b> {inputs.get('product_service', '')}<br/>
+    <b>Audience:</b> {inputs.get('target_audience', '')}<br/>
+    <b>Offer:</b> {inputs.get('offer', '')}<br/>
+    <b>Tone:</b> {inputs.get('tone', '')}
+    """
+    story.append(Paragraph(info, styles['Normal']))
     story.append(Spacer(1, 20))
     
-    def add_content_to_story(data, level=0):
-        """Recursively add content to PDF story"""
+    def add_content(data, level=0):
         if isinstance(data, dict):
             for key, value in data.items():
                 title = key.replace('_', ' ').title()
-                
-                if level == 0:
-                    story.append(Paragraph(title, heading_style))
-                else:
-                    story.append(Paragraph(title, subheading_style))
-                
-                if isinstance(value, list):
-                    for item in value:
-                        if isinstance(item, dict):
-                            for k, v in item.items():
-                                # Escape special characters for PDF
-                                text = str(v).replace('&', '&amp;').replace('<', '&lt;').replace('>', '&gt;')
-                                story.append(Paragraph(f"<b>{k}:</b> {text}", bullet_style))
-                        else:
-                            text = str(item).replace('&', '&amp;').replace('<', '&lt;').replace('>', '&gt;')
-                            story.append(Paragraph(f"• {text}", bullet_style))
-                elif isinstance(value, dict):
-                    add_content_to_story(value, level + 1)
-                else:
-                    text = str(value).replace('&', '&amp;').replace('<', '&lt;').replace('>', '&gt;')
-                    story.append(Paragraph(text, body_style))
-                
-                story.append(Spacer(1, 10))
+                story.append(Paragraph(title, styles['Heading2']))
+                add_content(value, level + 1)
         elif isinstance(data, list):
             for item in data:
                 text = str(item).replace('&', '&amp;').replace('<', '&lt;').replace('>', '&gt;')
-                story.append(Paragraph(f"• {text}", bullet_style))
+                story.append(Paragraph(f"• {text}", styles['Normal']))
+        else:
+            text = str(data).replace('&', '&amp;').replace('<', '&lt;').replace('>', '&gt;')
+            story.append(Paragraph(text, styles['Normal']))
+        story.append(Spacer(1, 10))
     
-    # Add content
-    if content_data:
-        add_content_to_story(content_data)
+    if content:
+        add_content(content)
     
-    # Footer
-    story.append(Spacer(1, 30))
-    story.append(Paragraph(
-        f"Generated on: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}",
-        ParagraphStyle('Footer', parent=styles['Normal'], alignment=1, fontSize=8)
-    ))
+    story.append(Paragraph(f"Generated: {datetime.now().strftime('%Y-%m-%d %H:%M')}", styles['Normal']))
     
-    # Build PDF
     doc.build(story)
-    pdf_buffer.seek(0)
-    
-    return pdf_buffer
+    buffer.seek(0)
+    return buffer
 
 # =============================================================================
-# STREAMLIT UI COMPONENTS
+# UI COMPONENTS
 # =============================================================================
-
 def render_sidebar():
-    """Render the sidebar with navigation and settings"""
+    """Render sidebar"""
     with st.sidebar:
-        st.image("https://img.icons8.com/3d-fluency/94/artificial-intelligence.png", width=80)
         st.title("🚀 AI Sales Agent")
         st.markdown("---")
         
-        # Navigation
         page = st.radio(
-            "Navigation",
-            ["🏠 Home", "✨ Generate Content", "📊 Dashboard", "⚙️ Settings"],
+            "Menu",
+            ["🏠 Home", "✨ Generate", "📊 History", "⚙️ Settings"],
             label_visibility="collapsed"
         )
         
         st.markdown("---")
         
-        # API Key input
-        api_key = st.text_input(
-            "OpenAI API Key",
-            type="password",
-            value=st.session_state.get('api_key', ''),
-            help="Enter your OpenAI API key"
-        )
-        
+        api_key = st.text_input("OpenAI API Key", type="password", value=st.session_state.get('api_key', ''))
         if api_key:
             st.session_state['api_key'] = api_key
-            st.success("✅ API Key configured")
-        
-        st.markdown("---")
-        st.markdown("### 📌 Quick Tips")
-        st.markdown("""
-        - Be specific about your target audience
-        - Include your unique selling proposition
-        - Mention any time-sensitive offers
-        - Choose the right tone for your brand
-        """)
+            st.success("✅ API Key set")
         
         return page
 
-def render_input_form():
-    """Render the main input form"""
-    st.subheader("📝 Business Details")
-    
-    col1, col2 = st.columns(2)
-    
-    with col1:
-        business_name = st.text_input(
-            "Business Name *",
-            placeholder="e.g., TechFlow Solutions"
-        )
-        
-        business_type = st.selectbox(
-            "Business Type *",
-            [
-                "E-commerce",
-                "SaaS",
-                "Local Service",
-                "Consulting",
-                "Healthcare",
-                "Education",
-                "Real Estate",
-                "Finance",
-                "Food & Restaurant",
-                "Fitness & Wellness",
-                "Travel & Tourism",
-                "Manufacturing",
-                "Other"
-            ]
-        )
-        
-        product_service = st.text_area(
-            "Product/Service Description *",
-            placeholder="Describe your product or service in detail...",
-            height=100
-        )
-    
-    with col2:
-        target_audience = st.text_area(
-            "Target Audience *",
-            placeholder="e.g., Small business owners aged 25-45, tech-savvy, looking to automate their workflow...",
-            height=80
-        )
-        
-        offer = st.text_input(
-            "Current Offer/Promotion",
-            placeholder="e.g., 50% off for first 100 customers"
-        )
-        
-        tone = st.selectbox(
-            "Content Tone *",
-            ["Professional", "Emotional", "Exciting", "Urgent", "Friendly", "Luxury"]
-        )
-    
-    st.markdown("---")
-    
-    platform = st.multiselect(
-        "Select Platforms *",
-        [
-            "All Platforms",
-            "Google Ads",
-            "Facebook",
-            "Instagram",
-            "SEO Content",
-            "Landing Page"
-        ],
-        default=["All Platforms"]
-    )
-    
-    return {
-        'business_name': business_name,
-        'business_type': business_type,
-        'product_service': product_service,
-        'target_audience': target_audience,
-        'offer': offer,
-        'tone': tone,
-        'platform': platform
-    }
-
-def display_content_results(results, platform_type):
-    """Display generated content results"""
-    if not results:
-        st.warning("No content generated. Please try again.")
-        return
-    
-    st.success("✅ Content generated successfully!")
-    
-    # Display based on content structure
-    if isinstance(results, dict):
-        for section_name, section_content in results.items():
-            with st.expander(f"📌 {section_name.replace('_', ' ').title()}", expanded=True):
-                if isinstance(section_content, list):
-                    for i, item in enumerate(section_content, 1):
-                        if isinstance(item, dict):
-                            for key, value in item.items():
-                                st.markdown(f"**{key}:** {value}")
-                            st.markdown("---")
-                        else:
-                            st.markdown(f"{i}. {item}")
-                elif isinstance(section_content, dict):
-                    for key, value in section_content.items():
-                        st.markdown(f"**{key.replace('_', ' ').title()}:**")
-                        if isinstance(value, list):
-                            for item in value:
-                                if isinstance(item, dict):
-                                    for k, v in item.items():
-                                        st.markdown(f"  - **{k}:** {v}")
-                                else:
-                                    st.markdown(f"  - {item}")
-                        elif isinstance(value, dict):
-                            for k, v in value.items():
-                                st.markdown(f"  - **{k}:** {v}")
-                        else:
-                            st.markdown(f"  {value}")
-                else:
-                    st.write(section_content)
-
-def render_generate_page():
-    """Render the content generation page"""
-    st.title("✨ Generate Marketing Content")
-    st.markdown("Create high-converting marketing content powered by AI")
-    
-    # Check API key
-    if 'api_key' not in st.session_state or not st.session_state['api_key']:
-        st.warning("⚠️ Please enter your OpenAI API key in the sidebar to continue.")
-        return
-    
-    # Input form
-    inputs = render_input_form()
-    
-    # Validate inputs
-    required_fields = ['business_name', 'business_type', 'product_service', 'target_audience']
-    is_valid = all(inputs.get(field) for field in required_fields)
-    
-    col1, col2, col3 = st.columns([1, 1, 1])
-    
-    with col2:
-        generate_btn = st.button(
-            "🚀 Generate Content",
-            type="primary",
-            use_container_width=True,
-            disabled=not is_valid
-        )
-    
-    if not is_valid and generate_btn:
-        st.error("Please fill in all required fields (*)")
-        return
-    
-    if generate_btn:
-        with st.spinner("🔄 Generating content... This may take a minute..."):
-            try:
-                generator = ContentGenerator(st.session_state['api_key'])
-                
-                results = {}
-                platforms = inputs['platform']
-                
-                if "All Platforms" in platforms:
-                    results = generator.generate_all_platforms(inputs)
-                else:
-                    if "Google Ads" in platforms:
-                        results['google_ads'] = generator.generate_google_ads(inputs)
-                    if "Facebook" in platforms or "Instagram" in platforms:
-                        social_results = generator.generate_social_media(inputs)
-                        if social_results:
-                            results.update(social_results)
-                    if "SEO Content" in platforms:
-                        results['seo'] = generator.generate_seo_content(inputs)
-                    if "Landing Page" in platforms:
-                        results['landing_page'] = generator.generate_landing_page(inputs)
-                
-                if results:
-                    # Store in session state
-                    st.session_state['last_results'] = results
-                    st.session_state['last_inputs'] = inputs
-                    
-                    # Extract keywords using NLP
-                    text_for_nlp = f"{inputs['product_service']} {inputs['target_audience']} {inputs['offer']}"
-                    nlp_keywords = extract_keywords_nlp(text_for_nlp)
-                    
-                    st.session_state['nlp_keywords'] = nlp_keywords
-                    
-                    # Save to history (user_id = 1 for demo)
-                    flat_outputs = {
-                        'headlines': json.dumps(results.get('google_ads', {}).get('headlines', [])),
-                        'descriptions': json.dumps(results.get('google_ads', {}).get('descriptions', [])),
-                        'hashtags': json.dumps(results.get('instagram', {}).get('hashtags', [])),
-                        'keywords': json.dumps(nlp_keywords),
-                        'cta': json.dumps(results.get('google_ads', {}).get('cta_suggestions', [])),
-                        'seo_title': json.dumps(results.get('seo', {}).get('titles', [])),
-                        'meta_description': json.dumps(results.get('seo', {}).get('meta_descriptions', [])),
-                        'landing_page_content': json.dumps(results.get('landing_page', {}))
-                    }
-                    save_to_history(1, inputs, flat_outputs)
-                    
-            except Exception as e:
-                st.error(f"Error generating content: {str(e)}")
-                return
-        
-        # Display results
-        if 'last_results' in st.session_state:
-            st.markdown("---")
-            st.header("📄 Generated Content")
-            
-            # NLP Keywords section
-            if 'nlp_keywords' in st.session_state:
-                with st.expander("🔑 Extracted Keywords (NLP)", expanded=True):
-                    keywords = st.session_state['nlp_keywords']
-                    hashtags = generate_hashtags(keywords)
-                    
-                    col1, col2 = st.columns(2)
-                    with col1:
-                        st.markdown("**Keywords:**")
-                        st.write(", ".join(keywords))
-                    with col2:
-                        st.markdown("**Generated Hashtags:**")
-                        st.write(" ".join(hashtags))
-            
-            display_content_results(st.session_state['last_results'], inputs['platform'])
-            
-            # Export buttons
-            st.markdown("---")
-            st.subheader("📥 Export Content")
-            
-            col1, col2, col3 = st.columns(3)
-            
-            with col1:
-                # DOCX Export
-                docx_buffer = export_to_docx(
-                    st.session_state['last_results'],
-                    st.session_state['last_inputs']
-                )
-                st.download_button(
-                    label="📄 Download DOCX",
-                    data=docx_buffer,
-                    file_name=f"marketing_content_{datetime.now().strftime('%Y%m%d_%H%M%S')}.docx",
-                    mime="application/vnd.openxmlformats-officedocument.wordprocessingml.document"
-                )
-            
-            with col2:
-                # PDF Export
-                pdf_buffer = export_to_pdf(
-                    st.session_state['last_results'],
-                    st.session_state['last_inputs']
-                )
-                st.download_button(
-                    label="📕 Download PDF",
-                    data=pdf_buffer,
-                    file_name=f"marketing_content_{datetime.now().strftime('%Y%m%d_%H%M%S')}.pdf",
-                    mime="application/pdf"
-                )
-            
-            with col3:
-                # JSON Export
-                json_str = json.dumps(st.session_state['last_results'], indent=2)
-                st.download_button(
-                    label="📋 Download JSON",
-                    data=json_str,
-                    file_name=f"marketing_content_{datetime.now().strftime('%Y%m%d_%H%M%S')}.json",
-                    mime="application/json"
-                )
-
-def render_dashboard():
-    """Render the dashboard with history"""
-    st.title("📊 Content Dashboard")
-    st.markdown("View and manage your generated content history")
-    
-    # Get history
-    history = get_user_history(1, limit=20)
-    
-    if not history:
-        st.info("No content history yet. Generate some content to see it here!")
-        return
-    
-    # Summary metrics
-    col1, col2, col3, col4 = st.columns(4)
-    
-    with col1:
-        st.metric("Total Generated", len(history))
-    
-    with col2:
-        platforms = [h['platform'] for h in history if h['platform']]
-        st.metric("Platforms Used", len(set(platforms)))
-    
-    with col3:
-        tones = [h['tone'] for h in history if h['tone']]
-        most_common_tone = max(set(tones), key=tones.count) if tones else "N/A"
-        st.metric("Most Used Tone", most_common_tone)
-    
-    with col4:
-        today_count = len([h for h in history if h['created_at'] and datetime.now().strftime('%Y-%m-%d') in h['created_at']])
-        st.metric("Generated Today", today_count)
-    
-    st.markdown("---")
-    
-    # History table
-    st.subheader("📜 Recent Content")
-    
-    for i, record in enumerate(history[:10]):
-        with st.expander(f"📌 {record['business_name']} - {record['created_at'][:10] if record['created_at'] else 'N/A'}"):
-            col1, col2 = st.columns(2)
-            
-            with col1:
-                st.markdown(f"**Business Type:** {record['business_type']}")
-                st.markdown(f"**Platform:** {record['platform']}")
-                st.markdown(f"**Tone:** {record['tone']}")
-            
-            with col2:
-                st.markdown(f"**Target Audience:** {record['target_audience']}")
-                st.markdown(f"**Offer:** {record['offer']}")
-            
-            if record['full_response']:
-                try:
-                    content = json.loads(record['full_response'])
-                    st.json(content)
-                except:
-                    st.text(record['full_response'])
-
-def render_settings():
-    """Render settings page"""
-    st.title("⚙️ Settings")
-    
-    st.subheader("🔑 API Configuration")
-    
-    api_key = st.text_input(
-        "OpenAI API Key",
-        type="password",
-        value=st.session_state.get('api_key', ''),
-        help="Your OpenAI API key for content generation"
-    )
-    
-    if api_key:
-        st.session_state['api_key'] = api_key
-    
-    model = st.selectbox(
-        "Model",
-        ["gpt-4o-mini", "gpt-4o", "gpt-4-turbo"],
-        help="Select the OpenAI model to use"
-    )
-    
-    st.session_state['model'] = model
-    
-    st.markdown("---")
-    
-    st.subheader("🎨 Content Preferences")
-    
-    default_tone = st.selectbox(
-        "Default Tone",
-        ["Professional", "Emotional", "Exciting", "Urgent", "Friendly", "Luxury"],
-        index=0
-    )
-    
-    st.session_state['default_tone'] = default_tone
-    
-    include_emojis = st.checkbox("Include emojis in social media content", value=True)
-    st.session_state['include_emojis'] = include_emojis
-    
-    st.markdown("---")
-    
-    st.subheader("📊 Data Management")
-    
-    if st.button("🗑️ Clear All History", type="secondary"):
-        conn = sqlite3.connect('sales_content.db')
-        cursor = conn.cursor()
-        cursor.execute("DELETE FROM content_history")
-        conn.commit()
-        conn.close()
-        st.success("History cleared successfully!")
-        st.rerun()
-
 def render_home():
-    """Render home page"""
+    """Home page"""
     st.title("🚀 AI Sales Copy & Ad Content Agent")
-    st.markdown("### Generate High-Converting Marketing Content in Seconds")
-    
-    st.markdown("---")
+    st.markdown("### Generate High-Converting Marketing Content")
     
     col1, col2, col3 = st.columns(3)
     
     with col1:
-        st.markdown("### 🎯 Google Ads")
-        st.markdown("""
-        - Headlines (30 chars)
-        - Descriptions (90 chars)
-        - Keywords targeting
-        - Negative keywords
-        """)
+        st.markdown("#### 🎯 Google Ads")
+        st.markdown("Headlines & descriptions with character limits")
     
     with col2:
-        st.markdown("### 📱 Social Media")
-        st.markdown("""
-        - Facebook ad copies
-        - Instagram captions
-        - Hashtag suggestions
-        - Story content
-        """)
+        st.markdown("#### 📱 Social Media")
+        st.markdown("Facebook & Instagram content with hashtags")
     
     with col3:
-        st.markdown("### 🔍 SEO Content")
-        st.markdown("""
-        - Meta titles
-        - Meta descriptions
-        - Keyword research
-        - URL suggestions
-        """)
+        st.markdown("#### 🔍 SEO")
+        st.markdown("Titles, meta descriptions & keywords")
     
     st.markdown("---")
+    st.info("👈 Enter your OpenAI API key in the sidebar and click 'Generate' to start!")
+
+def render_generate():
+    """Generate content page"""
+    st.title("✨ Generate Marketing Content")
+    
+    if not st.session_state.get('api_key'):
+        st.warning("⚠️ Enter your OpenAI API key in the sidebar first!")
+        return
     
     col1, col2 = st.columns(2)
     
     with col1:
-        st.markdown("### 🏠 Landing Pages")
-        st.markdown("""
-        - Hero sections
-        - Value propositions
-        - CTAs
-        - FAQ content
-        """)
+        business_name = st.text_input("Business Name *", placeholder="TechFlow Solutions")
+        business_type = st.selectbox("Business Type *", [
+            "E-commerce", "SaaS", "Local Service", "Consulting", "Healthcare",
+            "Education", "Real Estate", "Finance", "Restaurant", "Fitness", "Other"
+        ])
+        product_service = st.text_area("Product/Service *", placeholder="Describe your product...", height=100)
     
     with col2:
-        st.markdown("### 📤 Export Options")
-        st.markdown("""
-        - PDF reports
-        - Word documents
-        - JSON data
-        - Copy to clipboard
-        """)
+        target_audience = st.text_area("Target Audience *", placeholder="Who is your customer?", height=80)
+        offer = st.text_input("Current Offer", placeholder="50% off for first 100 customers")
+        tone = st.selectbox("Tone *", ["Professional", "Emotional", "Exciting", "Urgent", "Friendly", "Luxury"])
+    
+    platform = st.multiselect("Platforms", ["All Platforms", "Google Ads", "Facebook", "Instagram", "SEO", "Landing Page"], default=["All Platforms"])
+    
+    is_valid = all([business_name, business_type, product_service, target_audience])
+    
+    if st.button("🚀 Generate Content", type="primary", disabled=not is_valid, use_container_width=True):
+        inputs = {
+            'business_name': business_name,
+            'business_type': business_type,
+            'product_service': product_service,
+            'target_audience': target_audience,
+            'offer': offer,
+            'tone': tone,
+            'platform': platform
+        }
+        
+        with st.spinner("🔄 Generating content... Please wait..."):
+            results = generate_content(st.session_state['api_key'], inputs)
+        
+        if results:
+            st.session_state['results'] = results
+            st.session_state['inputs'] = inputs
+            
+            conn = init_database()
+            save_to_history(conn, inputs, results)
+            
+            text = f"{product_service} {target_audience} {offer}"
+            keywords = extract_keywords_simple(text)
+            st.session_state['keywords'] = keywords
+    
+    if 'results' in st.session_state and st.session_state['results']:
+        st.markdown("---")
+        st.success("✅ Content Generated!")
+        
+        results = st.session_state['results']
+        
+        if 'keywords' in st.session_state:
+            with st.expander("🔑 Extracted Keywords", expanded=True):
+                st.write(", ".join(st.session_state['keywords']))
+                st.write("**Hashtags:** " + " ".join(generate_hashtags(st.session_state['keywords'])))
+        
+        for section, content in results.items():
+            with st.expander(f"📌 {section.replace('_', ' ').title()}", expanded=True):
+                if isinstance(content, dict):
+                    for key, value in content.items():
+                        st.markdown(f"**{key.replace('_', ' ').title()}:**")
+                        if isinstance(value, list):
+                            for i, item in enumerate(value, 1):
+                                st.markdown(f"{i}. {item}")
+                        else:
+                            st.write(value)
+                elif isinstance(content, list):
+                    for i, item in enumerate(content, 1):
+                        st.markdown(f"{i}. {item}")
+                else:
+                    st.write(content)
+        
+        st.markdown("---")
+        st.subheader("📥 Export")
+        
+        col1, col2, col3 = st.columns(3)
+        
+        with col1:
+            docx_file = export_to_docx(results, st.session_state['inputs'])
+            st.download_button("📄 Download DOCX", docx_file, f"content_{datetime.now().strftime('%Y%m%d')}.docx")
+        
+        with col2:
+            pdf_file = export_to_pdf(results, st.session_state['inputs'])
+            st.download_button("📕 Download PDF", pdf_file, f"content_{datetime.now().strftime('%Y%m%d')}.pdf")
+        
+        with col3:
+            st.download_button("📋 Download JSON", json.dumps(results, indent=2), f"content_{datetime.now().strftime('%Y%m%d')}.json")
+
+def render_history():
+    """History page"""
+    st.title("📊 Content History")
+    
+    conn = init_database()
+    history = get_history(conn)
+    
+    if not history:
+        st.info("No content generated yet!")
+        return
+    
+    st.metric("Total Generated", len(history))
+    
+    for record in history[:10]:
+        with st.expander(f"📌 {record['business_name']} - {record['created_at'][:10] if record['created_at'] else 'N/A'}"):
+            st.markdown(f"**Type:** {record['business_type']}")
+            st.markdown(f"**Tone:** {record['tone']}")
+            st.markdown(f"**Platform:** {record['platform']}")
+            
+            if record['full_response']:
+                try:
+                    st.json(json.loads(record['full_response']))
+                except:
+                    st.text(record['full_response'][:500])
+
+def render_settings():
+    """Settings page"""
+    st.title("⚙️ Settings")
+    
+    api_key = st.text_input("OpenAI API Key", type="password", value=st.session_state.get('api_key', ''))
+    if api_key:
+        st.session_state['api_key'] = api_key
+        st.success("API Key saved!")
     
     st.markdown("---")
     
-    st.info("👈 Enter your OpenAI API key in the sidebar and navigate to 'Generate Content' to get started!")
-    
-    # Quick demo section
-    st.markdown("### 🎬 How It Works")
-    
-    steps = [
-        ("1️⃣", "Enter Business Details", "Provide your business name, type, product/service, and target audience"),
-        ("2️⃣", "Select Platforms", "Choose which platforms you want content for"),
-        ("3️⃣", "Generate Content", "Our AI creates optimized content for each platform"),
-        ("4️⃣", "Export & Use", "Download as PDF, DOCX, or copy directly")
-    ]
-    
-    cols = st.columns(4)
-    for i, (icon, title, desc) in enumerate(steps):
-        with cols[i]:
-            st.markdown(f"### {icon}")
-            st.markdown(f"**{title}**")
-            st.markdown(desc)
+    if st.button("🗑️ Clear History"):
+        conn = init_database()
+        conn.execute("DELETE FROM content_history")
+        conn.commit()
+        st.success("History cleared!")
 
 # =============================================================================
-# MAIN APPLICATION
+# MAIN
 # =============================================================================
-
 def main():
-    """Main application entry point"""
-    # Page config
-    st.set_page_config(
-        page_title="AI Sales Copy Agent",
-        page_icon="🚀",
-        layout="wide",
-        initial_sidebar_state="expanded"
-    )
-    
-    # Custom CSS
+    """Main app"""
     st.markdown("""
     <style>
-    .stButton>button {
-        width: 100%;
-        border-radius: 10px;
-        height: 50px;
-        font-weight: bold;
-    }
-    .stTextInput>div>div>input {
-        border-radius: 10px;
-    }
-    .stTextArea>div>div>textarea {
-        border-radius: 10px;
-    }
-    .stSelectbox>div>div>select {
-        border-radius: 10px;
-    }
-    div[data-testid="stExpander"] div[role="button"] p {
-        font-size: 1.1rem;
-        font-weight: 600;
-    }
-    .main .block-container {
-        padding-top: 2rem;
-    }
+    .stButton>button {border-radius: 10px; height: 45px; font-weight: bold;}
+    .stTextInput>div>div>input {border-radius: 8px;}
+    .stTextArea>div>div>textarea {border-radius: 8px;}
     </style>
     """, unsafe_allow_html=True)
     
-    # Initialize database
     init_database()
     
-    # Initialize session state
     if 'api_key' not in st.session_state:
-        st.session_state['api_key'] = os.getenv('OPENAI_API_KEY', '')
+        st.session_state['api_key'] = os.environ.get('OPENAI_API_KEY', '')
     
-    # Render sidebar and get selected page
     page = render_sidebar()
     
-    # Route to appropriate page
     if page == "🏠 Home":
         render_home()
-    elif page == "✨ Generate Content":
-        render_generate_page()
-    elif page == "📊 Dashboard":
-        render_dashboard()
+    elif page == "✨ Generate":
+        render_generate()
+    elif page == "📊 History":
+        render_history()
     elif page == "⚙️ Settings":
         render_settings()
 
