@@ -1117,6 +1117,10 @@ def render_generate_page():
                     st.session_state['nlp_keywords'] = nlp_keywords
                     
                     # Save to history (user_id = 1 for demo)
+                    # Convert platform list to string for database
+                    inputs_for_db = inputs.copy()
+                    inputs_for_db['platform'] = ', '.join(inputs['platform']) if isinstance(inputs['platform'], list) else inputs['platform']
+                    
                     flat_outputs = {
                         'headlines': json.dumps(results.get('google_ads', {}).get('headlines', [])),
                         'descriptions': json.dumps(results.get('google_ads', {}).get('descriptions', [])),
@@ -1127,7 +1131,7 @@ def render_generate_page():
                         'meta_description': json.dumps(results.get('seo', {}).get('meta_descriptions', [])),
                         'landing_page_content': json.dumps(results.get('landing_page', {}))
                     }
-                    save_to_history(1, inputs, flat_outputs)
+                    save_to_history(1, inputs_for_db, flat_outputs)
                     
             except Exception as e:
                 st.error(f"Error generating content: {str(e)}")
