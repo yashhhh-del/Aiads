@@ -1406,3 +1406,21 @@ def main():
     init_database()
     
     # Initialize session state
+    if 'api_key' not in st.session_state:
+        st.session_state['api_key'] = os.getenv('OPENAI_API_KEY', '')
+    
+    # Render sidebar and get selected page
+    page = render_sidebar()
+    
+    # Route to appropriate page
+    if page == "🏠 Home":
+        render_home()
+    elif page == "✨ Generate Content":
+        render_generate_page()
+    elif page == "📊 Dashboard":
+        render_dashboard()
+    elif page == "⚙️ Settings":
+        render_settings()
+
+if __name__ == "__main__":
+    main()
