@@ -178,18 +178,19 @@ def register_user(username, password, email):
 
 def download_nltk_data():
     """Download required NLTK data"""
-    try:
-        nltk.data.find('tokenizers/punkt')
-    except LookupError:
-        nltk.download('punkt', quiet=True)
-    try:
-        nltk.data.find('corpora/stopwords')
-    except LookupError:
-        nltk.download('stopwords', quiet=True)
-    try:
-        nltk.data.find('taggers/averaged_perceptron_tagger')
-    except LookupError:
-        nltk.download('averaged_perceptron_tagger', quiet=True)
+    nltk_packages = [
+        ('tokenizers/punkt', 'punkt'),
+        ('tokenizers/punkt_tab', 'punkt_tab'),
+        ('corpora/stopwords', 'stopwords'),
+        ('taggers/averaged_perceptron_tagger', 'averaged_perceptron_tagger'),
+        ('taggers/averaged_perceptron_tagger_eng', 'averaged_perceptron_tagger_eng'),
+    ]
+    
+    for path, package in nltk_packages:
+        try:
+            nltk.data.find(path)
+        except LookupError:
+            nltk.download(package, quiet=True)
 
 def extract_keywords_nlp(text, num_keywords=15):
     """
