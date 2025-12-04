@@ -11,11 +11,11 @@ A complete AI system that generates multi-platform marketing content including:
 - Landing page content
 
 Author: AI Sales Agent
-Version: 1.0.0
+Version: 2.0.0 (Groq FREE Edition)
 """
 
 import streamlit as st
-import openai
+from groq import Groq
 import os
 import json
 import sqlite3
@@ -319,6 +319,7 @@ IMPORTANT:
 - Make headlines compelling and action-oriented
 - Include the main keyword in at least 3 headlines
 - Descriptions should expand on the value proposition
+- Return ONLY valid JSON, no extra text
 """
 
     @staticmethod
@@ -380,6 +381,7 @@ IMPORTANT:
 - Instagram captions should be engaging and include emojis where appropriate
 - Hashtags should mix popular and niche tags
 - Include a strong hook in the first line
+- Return ONLY valid JSON, no extra text
 """
 
     @staticmethod
@@ -437,6 +439,7 @@ IMPORTANT:
 - Titles should include primary keyword near the beginning
 - Meta descriptions should be compelling and include a CTA
 - Keywords should have commercial/transactional intent
+- Return ONLY valid JSON, no extra text
 """
 
     @staticmethod
@@ -469,14 +472,12 @@ Generate the following in JSON format:
             "description": "2-3 sentence description",
             "icon_suggestion": "suggested icon name"
         }}
-        // 4 total value propositions
     ],
     "features_benefits": [
         {{
             "feature": "Feature name",
             "benefit": "How it benefits the user"
         }}
-        // 6 feature-benefit pairs
     ],
     "social_proof": {{
         "testimonial_prompts": [
@@ -494,7 +495,6 @@ Generate the following in JSON format:
             "question": "FAQ question",
             "answer": "Concise answer"
         }}
-        // 5 FAQ items
     ],
     "urgency_elements": [
         // 3 urgency/scarcity elements
@@ -511,6 +511,7 @@ IMPORTANT:
 - Value props should address pain points
 - Include specific numbers where possible
 - CTAs should be action-oriented
+- Return ONLY valid JSON, no extra text
 """
 
     @staticmethod
@@ -575,28 +576,29 @@ Generate comprehensive marketing content for ALL platforms in JSON format:
 }}
 
 Ensure all content is cohesive across platforms while optimized for each platform's best practices.
+Return ONLY valid JSON, no extra text or markdown.
 """
 
 # =============================================================================
-# LLM CONTENT GENERATION ENGINE
+# LLM CONTENT GENERATION ENGINE (GROQ - FREE)
 # =============================================================================
 
 class ContentGenerator:
-    """Main content generation engine using OpenAI"""
+    """Main content generation engine using Groq (FREE & FAST)"""
     
     def __init__(self, api_key):
-        self.client = openai.OpenAI(api_key=api_key)
-        self.model = "gpt-4o-mini"  # Can be changed to gpt-4o for better quality
+        self.client = Groq(api_key=api_key)
+        self.model = "llama-3.3-70b-versatile"  # Free and powerful
     
     def generate_content(self, prompt, max_tokens=4000):
-        """Generate content using OpenAI API"""
+        """Generate content using Groq API"""
         try:
             response = self.client.chat.completions.create(
                 model=self.model,
                 messages=[
                     {
                         "role": "system",
-                        "content": "You are an expert marketing copywriter. Always respond with valid JSON only. No markdown, no code blocks, just pure JSON."
+                        "content": "You are an expert marketing copywriter. Always respond with valid JSON only. No markdown, no code blocks, no explanations - just pure JSON that can be parsed directly."
                     },
                     {
                         "role": "user",
@@ -614,10 +616,16 @@ class ContentGenerator:
                 content = re.sub(r'^```json?\n?', '', content)
                 content = re.sub(r'\n?```$', '', content)
             
+            # Try to find JSON in the response
+            json_match = re.search(r'\{[\s\S]*\}', content)
+            if json_match:
+                content = json_match.group()
+            
             return json.loads(content)
             
         except json.JSONDecodeError as e:
             st.error(f"Error parsing response: {e}")
+            st.code(content[:500] if 'content' in dir() else "No content")
             return None
         except Exception as e:
             st.error(f"API Error: {e}")
@@ -878,6 +886,7 @@ def render_sidebar():
     with st.sidebar:
         st.image("https://img.icons8.com/3d-fluency/94/artificial-intelligence.png", width=80)
         st.title("🚀 AI Sales Agent")
+        st.markdown("**FREE Edition (Groq)**")
         st.markdown("---")
         
         # Navigation
@@ -891,15 +900,18 @@ def render_sidebar():
         
         # API Key input
         api_key = st.text_input(
-            "OpenAI API Key",
+            "Groq API Key (FREE)",
             type="password",
             value=st.session_state.get('api_key', ''),
-            help="Enter your OpenAI API key"
+            help="Get FREE API key from console.groq.com"
         )
         
         if api_key:
             st.session_state['api_key'] = api_key
             st.success("✅ API Key configured")
+        else:
+            st.warning("⚠️ Enter Groq API Key")
+            st.markdown("[Get FREE Key →](https://console.groq.com)")
         
         st.markdown("---")
         st.markdown("### 📌 Quick Tips")
@@ -908,6 +920,15 @@ def render_sidebar():
         - Include your unique selling proposition
         - Mention any time-sensitive offers
         - Choose the right tone for your brand
+        """)
+        
+        st.markdown("---")
+        st.markdown("### 🆓 Why Groq?")
+        st.markdown("""
+        - ✅ **100% FREE**
+        - ✅ Super fast (10x faster)
+        - ✅ No credit card needed
+        - ✅ Llama 3.3 70B model
         """)
         
         return page
@@ -1032,11 +1053,12 @@ def display_content_results(results, platform_type):
 def render_generate_page():
     """Render the content generation page"""
     st.title("✨ Generate Marketing Content")
-    st.markdown("Create high-converting marketing content powered by AI")
+    st.markdown("Create high-converting marketing content powered by **FREE Groq AI**")
     
     # Check API key
     if 'api_key' not in st.session_state or not st.session_state['api_key']:
-        st.warning("⚠️ Please enter your OpenAI API key in the sidebar to continue.")
+        st.warning("⚠️ Please enter your FREE Groq API key in the sidebar to continue.")
+        st.info("👉 Get your FREE API key at [console.groq.com](https://console.groq.com)")
         return
     
     # Input form
@@ -1061,7 +1083,7 @@ def render_generate_page():
         return
     
     if generate_btn:
-        with st.spinner("🔄 Generating content... This may take a minute..."):
+        with st.spinner("🔄 Generating content with Groq AI... This is fast!"):
             try:
                 generator = ContentGenerator(st.session_state['api_key'])
                 
@@ -1236,19 +1258,21 @@ def render_settings():
     st.subheader("🔑 API Configuration")
     
     api_key = st.text_input(
-        "OpenAI API Key",
+        "Groq API Key (FREE)",
         type="password",
         value=st.session_state.get('api_key', ''),
-        help="Your OpenAI API key for content generation"
+        help="Get your FREE API key from console.groq.com"
     )
     
     if api_key:
         st.session_state['api_key'] = api_key
     
+    st.markdown("👉 [Get FREE Groq API Key](https://console.groq.com)")
+    
     model = st.selectbox(
         "Model",
-        ["gpt-4o-mini", "gpt-4o", "gpt-4-turbo"],
-        help="Select the OpenAI model to use"
+        ["llama-3.3-70b-versatile", "llama-3.1-8b-instant", "mixtral-8x7b-32768"],
+        help="Select the Groq model to use (all FREE!)"
     )
     
     st.session_state['model'] = model
@@ -1285,6 +1309,7 @@ def render_home():
     """Render home page"""
     st.title("🚀 AI Sales Copy & Ad Content Agent")
     st.markdown("### Generate High-Converting Marketing Content in Seconds")
+    st.markdown("#### 🆓 **100% FREE** - Powered by Groq AI")
     
     st.markdown("---")
     
@@ -1341,7 +1366,13 @@ def render_home():
     
     st.markdown("---")
     
-    st.info("👈 Enter your OpenAI API key in the sidebar and navigate to 'Generate Content' to get started!")
+    # Getting started box
+    st.info("""
+    **🚀 Getting Started (3 Easy Steps):**
+    1. Get FREE API key from [console.groq.com](https://console.groq.com)
+    2. Enter API key in sidebar 👈
+    3. Navigate to 'Generate Content' and start creating!
+    """)
     
     # Quick demo section
     st.markdown("### 🎬 How It Works")
@@ -1368,7 +1399,7 @@ def main():
     """Main application entry point"""
     # Page config
     st.set_page_config(
-        page_title="AI Sales Copy Agent",
+        page_title="AI Sales Copy Agent (FREE)",
         page_icon="🚀",
         layout="wide",
         initial_sidebar_state="expanded"
@@ -1407,12 +1438,18 @@ def main():
     
     # Initialize session state
     if 'api_key' not in st.session_state:
-        st.session_state['api_key'] = os.getenv('OPENAI_API_KEY', '')
+        st.session_state['api_key'] = os.getenv('GROQ_API_KEY', '')
     
-    # Render sidebar and get selected page
+    if 'last_results' not in st.session_state:
+        st.session_state['last_results'] = None
+    
+    if 'last_inputs' not in st.session_state:
+        st.session_state['last_inputs'] = None
+    
+    # Render sidebar and get current page
     page = render_sidebar()
     
-    # Route to appropriate page
+    # Render appropriate page based on navigation
     if page == "🏠 Home":
         render_home()
     elif page == "✨ Generate Content":
@@ -1421,6 +1458,7 @@ def main():
         render_dashboard()
     elif page == "⚙️ Settings":
         render_settings()
+
 
 if __name__ == "__main__":
     main()
